@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+import imap_data_access
 from imap_data_access import AncillaryFilePath, ScienceFilePath, SPICEFilePath
 
 
@@ -41,7 +42,7 @@ class ProcessingInput(ABC):
 
     Attributes
     ----------
-    filepath_list : list[str]
+    filename_list : list[str]
         A list of filepaths.
     input_type : ProcessingInputType
         The type of input file.
@@ -56,7 +57,7 @@ class ProcessingInput(ABC):
 
     filename_list: list[str] = None
     input_type: ProcessingInputType = None
-    # Following three are retrieved from dependency check.
+    # The Following three are retrieved from dependency check.
     # But they can also come from the filename.
     source: str = field(init=False)
     data_type: str = field(init=False)  # should be data level or "ancillary" or "spice"
@@ -74,12 +75,17 @@ class ProcessingInput(ABC):
         args: str
             Filenames (not paths), as strings.
         """
-        self.filename_list = []
-        for filename in args:
-            if not isinstance(filename, str):
-                raise ValueError("All arguments must be strings")
-            self.filename_list.append(filename)
-        self._set_attributes_from_filenames()
+        file_objects = []
+        for file in args:
+            if not isinstance(file, str) and not isinstance(
+                file, (ScienceFilePath, AncillaryFilePath)
+            ):
+                raise ValueError(
+                    "All arguments must be strings or objects of class "
+                    "ScienceFilePath"
+                )
+            file_objects.append(file)
+        self._set_attributes_from_filenames(file_objects)
         if len(args) < 1:
             raise ValueError("At least one file must be provided.")
 
@@ -100,7 +106,7 @@ class ProcessingInput(ABC):
         """
         raise NotImplementedError
 
-    def _set_attributes_from_filenames(self):
+    def _set_attributes_from_filenames(self, file_objects):
         """Set the source, data type, and descriptor attributes based on the filenames.
 
         This method is called by the constructor and can be overridden by subclasses.
@@ -113,16 +119,22 @@ class ProcessingInput(ABC):
         data_type = set()
         descriptor = set()
         file_path_list = []
-        for file in self.filename_list:
-            path_validator = InputTypePathMapper[self.input_type.name].value(file)
+        filename_list = []
+        for file in file_objects:
+            if isinstance(file, ScienceFilePath):
+                file_path_list.append(file)
+                path_validator = file
+            else:
+                path_validator = InputTypePathMapper[self.input_type.name].value(file)
+                file_path_list.append(path_validator)
 
+            filename_list.append(str(path_validator.filename))
             source.add(path_validator.instrument)
             if self.input_type == ProcessingInputType.SCIENCE_FILE:
                 data_type.add(path_validator.data_level)
             else:
                 data_type.add(self.input_type.value)
             descriptor.add(path_validator.descriptor)
-            file_path_list.append(str(path_validator.filename))
 
         if len(source) != 1 or len(data_type) != 1 or len(descriptor) != 1:
             raise ValueError(
@@ -133,6 +145,7 @@ class ProcessingInput(ABC):
         self.data_type = data_type.pop()
         self.descriptor = descriptor.pop()
         self.file_path_list = file_path_list
+        self.filename_list = filename_list
 
     def construct_json_output(self):
         """Construct a JSON output.
@@ -191,6 +204,63 @@ class ScienceInput(ProcessingInput):
             if end_time is None or date > end_time:
                 end_time = date
         return start_time, end_time
+
+    @classmethod
+    def generate_from_inputs(cls, inputs: list[dict]) -> ScienceInput:
+        """Generate a ScienceFilePath from inputs and return a ScienceInput.
+
+        This can be used instead of the __init__ method to make a new instance:
+        ```
+        science_input = ScienceInput.generate_from_inputs({
+            "data_source": "mag",
+            "data_type": "l0",
+            "descriptor" :"test",
+            "start_date":
+            "20240213",
+            "version": "v001"})
+        ```
+
+        Parameters
+        ----------
+        inputs : list[dict]
+            dictionaries each containing:
+            data_source : str
+                The instrument for the filename
+            data_type : str
+                The data level for the filename
+            descriptor : str
+                The descriptor for the filename
+            start_time: str
+                The start time for the filename
+            version : str
+                The version of the data
+            repointing : int, optional
+                The repointing number for this file, optional field that
+                is not always present
+
+
+        Returns
+        -------
+        ScienceInputInput
+            The generated ProcessingInput object.
+        """
+        repointing = None
+        filepaths = []
+
+        for file_inputs in inputs:
+            if "repointing" in inputs:
+                repointing = file_inputs["repointing"]
+            filepaths.append(
+                imap_data_access.ScienceFilePath.generate_from_inputs(
+                    file_inputs["data_source"],
+                    file_inputs["data_type"],
+                    file_inputs["descriptor"],
+                    file_inputs["start_date"],
+                    file_inputs["version"],
+                    repointing,
+                )
+            )
+        return cls(*filepaths)
 
 
 class AncillaryInput(ProcessingInput):
@@ -261,6 +331,66 @@ class AncillaryInput(ProcessingInput):
         # todo: complete this
         return NotImplementedError
 
+    @classmethod
+    def generate_from_inputs(
+        cls,
+        inputs: list[dict],
+    ) -> AncillaryInput:
+        """Generate an AncillaryFilePath from inputs and return an AncillaryInput.
+
+        This can be used instead of the __init__ method to make a new instance:
+        ```
+        ancillary_input = AncillaryInput.generate_from_inputs({
+            "data_source": "mag",
+             "descriptor" :"test",
+             "version": "v001",
+             "extension": ".cdf",
+             "start_time": "20240213"})
+        ```
+
+        Parameters
+        ----------
+        inputs: list[dict]
+            dictionaries each containing:
+            data_source : str
+                The instrument for the filename.
+            descriptor : str
+                The descriptor for the ancillary filename.
+            version : str
+                The version of the data.
+            extension : str
+                The extension type of the file.
+            start_time: str
+                The start time for the filename. An updated
+                start time or the mission start time.
+            end_time: str, optional
+                The end time for the filename. If not provided,
+                the file is valid until a file with a later
+                start_date and no end_date.
+
+        Returns
+        -------
+        AncillaryInput
+            The generated ProcessingInput object.
+        """
+        end_time = None
+        filepaths = []
+
+        for file_inputs in inputs:
+            if "end_time" in inputs:
+                end_time = file_inputs["end_time"]
+            filepaths.append(
+                imap_data_access.AncillaryFilePath.generate_from_inputs(
+                    file_inputs["data_source"],
+                    file_inputs["descriptor"],
+                    file_inputs["version"],
+                    file_inputs["extension"],
+                    file_inputs["start_time"],
+                    end_time,
+                )
+            )
+        return cls(*filepaths)
+
 
 class SPICEInput(ProcessingInput):
     """SPICE file subclass for ProcessingInput."""
@@ -279,7 +409,7 @@ class SPICEInput(ProcessingInput):
         # Not yet completed
         raise NotImplementedError
 
-    def _set_attributes_from_filenames(self) -> None:
+    def _set_attributes_from_filenames(self, file_objects) -> None:
         """Set the source, data type, and descriptor attributes based on filename."""
         # TODO: update SPICEFilePath to retrieve data_type and descriptor from
         # file name. Do we have an expected filename format?

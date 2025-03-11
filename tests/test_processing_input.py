@@ -13,13 +13,17 @@ def test_create_science_files():
         "imap_mag_l1a_burst-magi_20240310_v000.cdf",
     )
 
-    assert one_file.file_path_list == ["imap_mag_l1a_norm-magi_20240312_v000.cdf"]
+    assert (
+        str(one_file.file_path_list[0].filename)
+        == "imap_mag_l1a_norm-magi_20240312_v000.cdf"
+    )
     assert one_file.input_type == ProcessingInputType.SCIENCE_FILE
     assert one_file.source == "mag"
     assert one_file.descriptor == "norm-magi"
     assert one_file.data_type == "l1a"
 
-    assert two_files.file_path_list == [
+    two_file_paths = [str(file_obj.filename) for file_obj in two_files.file_path_list]
+    assert two_file_paths == [
         "imap_mag_l1a_burst-magi_20240312_v000.cdf",
         "imap_mag_l1a_burst-magi_20240310_v000.cdf",
     ]
@@ -42,13 +46,16 @@ def test_create_ancillary_files():
         "imap_mag_l1b-cal_20250103-20250104_v002.cdf",
     )
 
-    assert one_file.file_path_list == ["imap_mag_l1b-cal_20250101_v001.cdf"]
+    assert (
+        str(one_file.file_path_list[0].filename) == "imap_mag_l1b-cal_20250101_v001.cdf"
+    )
     assert one_file.input_type == ProcessingInputType.ANCILLARY_FILE
     assert one_file.source == "mag"
     assert one_file.descriptor == "l1b-cal"
     assert one_file.data_type == "ancillary"
 
-    assert two_files.file_path_list == [
+    two_file_paths = [str(file_obj.filename) for file_obj in two_files.file_path_list]
+    assert two_file_paths == [
         "imap_mag_l1b-cal_20250101_v001.cdf",
         "imap_mag_l1b-cal_20250103-20250104_v002.cdf",
     ]
@@ -124,3 +131,48 @@ def test_get_time_range():
 
     assert start == datetime.strptime("20250101", "%Y%m%d")
     assert end == datetime.strptime("20250104", "%Y%m%d")
+
+
+def test_generate_from_inputs_science():
+    inputs = {
+        "data_source": "mag",
+        "data_type": "l1a",
+        "descriptor": "norm-magi",
+        "start_date": "20240312",
+        "version": "v000",
+    }
+    one_file = processing_input.ScienceInput.generate_from_inputs(inputs)
+    assert (
+        str(one_file.file_path_list[0].filename)
+        == "imap_mag_l1a_norm-magi_20240312_v000.cdf"
+    )
+    assert one_file.input_type == ProcessingInputType.SCIENCE_FILE
+    assert one_file.source == "mag"
+    assert one_file.descriptor == "norm-magi"
+    assert one_file.data_type == "l1a"
+
+
+def test_generate_from_inputs_ancillary():
+    inputs_1 = {
+        "data_source": "mag",
+        "descriptor": "l1b-cal",
+        "start_time": "20250101",
+        "version": "v001",
+        "extension": "cdf",
+        "end_time": "20250102",
+    }
+    inputs_2 = inputs_1.copy()
+    inputs_2["start_time"] = "20250104"
+    inputs_2["end_time"] = "20250105"
+
+    two_files = processing_input.AncillaryInput.generate_from_inputs(inputs_1, inputs_2)
+    two_file_paths = [str(file_obj.filename) for file_obj in two_files.file_path_list]
+    assert two_file_paths == [
+        "imap_mag_l1b-cal_20250101-20250102_v001.cdf",
+        "imap_mag_l1b-cal_20250104-20250105_v001.cdf",
+    ]
+
+    assert two_files.input_type == ProcessingInputType.ANCILLARY_FILE
+    assert two_files.source == "mag"
+    assert two_files.descriptor == "l1b-cal"
+    assert two_files.data_type == "ancillary"
